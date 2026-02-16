@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Rubik's Cube Mystic Final</title>
+<style>
+  html, body { 
+    margin:0; height:100%; overflow:hidden; 
+    font-family: system-ui, -apple-system;
+    background: #050505;
+  }
+  #stage { width:100vw; height:100vh; touch-action:none; }
+  
+  /* === НИЖНИЕ КНОПКИ === */
+  .controls { 
+    position:fixed; bottom:40px; right:30px; 
+    display:flex; flex-direction:column; gap:16px; z-index:999; 
+  }
+  
+  .btn {
+    width:70px; height:70px; border-radius:20px; 
+    background:rgba(30, 30, 35, 0.4); 
+    color:#e0e0e0; 
+    border:1px solid rgba(255,255,255,0.1); 
+    font-weight: 600; font-size: 11px;
+    display:flex; align-items:center; justify-content:center; flex-direction: column;
+    backdrop-filter: blur(10px); 
+    box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+    cursor: pointer; transition: all 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: scale(0.95); background:rgba(255,255,255,0.15); }
+  
+  .lock-btn.active { 
+    background: rgba(255, 69, 0, 0.2); 
+    border-color: #ff4500;
+    color: #ff8800;
+    box-shadow: 0 0 25px rgba(255, 69, 0, 0.3);
+  }
+  .lock-btn span { font-size: 20px; margin-bottom: 2px; }
+
+  /* === МИСТИЧЕСКИЙ ТАЙМЕР (ИСКРЫ) === */
+  #timer-container {
+    position: fixed; top: 50px; left: 0; width: 100%;
+    display: flex; justify-content: center; align-items: center;
+    pointer-events: none; z-index: 10;
+  }
+
+  #timer {
+    font-family: 'Courier New', monospace;
+    font-weight: 800;
+    font-size: 56px;
+    letter-spacing: 4px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.8) 0%, rgba(255,160,0,0.6) 50%, rgba(255,69,0,0) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 
+      0 0 20px rgba(255, 100, 0, 0.6),
+      0 0 40px rgba(255, 50, 0, 0.4);
+    filter: blur(0.5px);
+    opacity: 0.8;
+    animation: fire-flicker 3s infinite alternate;
+  }
+
+  @keyframes fire-flicker {
+    0% { opacity: 0.7; transform: scale(1); filter: blur(0.5px); }
+    25% { opacity: 0.85; transform: scale(1.02); filter: blur(0.2px); text-shadow: 0 0 25px rgba(255, 140, 0, 0.8); }
+    50% { opacity: 0.6; transform: scale(0.98); filter: blur(1px); }
+    75% { opacity: 0.9; transform: scale(1.01); filter: blur(0.3px); }
+    100% { opacity: 0.75; transform: scale(1); filter: blur(0.6px); }
+  }
+
+  /* === ИКОНКА ВИБРАЦИИ (СПУЩЕНА НИЖЕ) === */
+  #vibro-toggle {
+    position: fixed; top: 120px; right: 30px; /* Изменено положение */
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    backdrop-filter: blur(5px);
+    cursor: pointer; z-index: 999;
+    transition: all 0.3s;
+  }
+  #vibro-toggle.active {
+    color: #ffaa00;
+    border-color: #ffaa00;
+    box-shadow: 0 0 15px rgba(255, 170, 0, 0.2);
+    background: rgba(255, 170, 0, 0.1);
+  }
+
+  /* Статус бар */
+  #status {
+    position: fixed; top: 120px; left: 50%; transform: translateX(-50%);
+    color: #ffcc00; font-weight: 600; font-size: 16px; letter-spacing: 1px;
+    text-shadow: 0 0 10px rgba(255, 200, 0, 0.5);
+    opacity: 0; transition: opacity 0.5s; pointer-events: none;
+  }
+  #status.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div id="stage"></div>
+
+<div id="timer-container">
+  <div id="timer">00:00.00</div>
+</div>
+<div id="vibro-toggle" class="active">📳</div>
+<div id="status"></div>
+
+<div class="controls">
+  <div id="btnLock" class="btn lock-btn">
+    <span>🔓</span>
+    <div>FREE</div>
+  </div>
+  <div id="btnScramble" class="btn">
+    <span style="font-size:18px; margin-bottom:2px">🎲</span>
+    <div>MIX</div>
+  </div>
+  <div id="btnReset" class="btn">
+    <span style="font-size:18px; margin-bottom:2px">🔄</span>
+    <div>RESET</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+(() => {
+  const CUBE_STEP = 1.05;
+  const isMobile = window.innerWidth < 768;
+  
+  let gameState = {
+    timer: 0, timerRunning: false, timerInterval: null,
+    isSolved: true, cameraLocked: false, isAnimating: false,
+    rotationVelocity: 0,
+    vibrationEnabled: true
+  };
+  
+  const stickerGeo = new THREE.PlaneGeometry(0.88, 0.88);
+  const MAT_OPTS = { roughness: 0.2, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -1 };
+  
+  const MATERIALS = {
+    base: new THREE.MeshStandardMaterial({ color: 0x0a0a0a, roughness: 0.9, metalness: 0.0 }),
+    inner: new THREE.MeshStandardMaterial({ color: 0x050505, roughness: 0.9 }),
+    r: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0xdc2626 }),
+    l: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0xea580c }),
+    u: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0xfacc15 }),
+    d: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0xf5f5f5 }),
+    f: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0x16a34a }),
+    b: new THREE.MeshStandardMaterial({ ...MAT_OPTS, color: 0x2563eb })
+  };
+
+  const stage = document.getElementById("stage");
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 100);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  stage.appendChild(renderer.domElement);
+
+  // === SHADERS (MYSTIC FOG) ===
+  const fogVertexShader = `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+  const fogFragmentShader = `
+    uniform float u_time; uniform float u_rotationVelocity; varying vec2 vUv;
+    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+    float snoise(vec2 v) { const vec4 C = vec4(0.211324865405187, 0.366025403784439, -0.577350269189626, 0.024390243902439); vec2 i  = floor(v + dot(v, C.yy) ); vec2 x0 = v -   i + dot(i, C.xx); vec2 i1; i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0); vec4 x12 = x0.xyxy + C.xxzz; x12.xy -= i1; i = mod289(i); vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0 )) + i.x + vec3(0.0, i1.x, 1.0 )); vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0); m = m*m ; m = m*m ; vec3 x = 2.0 * fract(p * C.www) - 1.0; vec3 h = abs(x) - 0.5; vec3 ox = floor(x + 0.5); vec3 a0 = x - ox; m *= 1.79284291400159 - 0.85373472095314 * ( a0*a0 + h*h ); vec3 g; g.x  = a0.x  * x0.x  + h.x  * x0.y; g.yz = a0.yz * x12.xz + h.yz * x12.yw; return 130.0 * dot(m, g); }
+    float fbm(vec2 p) { float value = 0.0; float amplitude = 0.5; float frequency = 1.0; for(int i = 0; i < 5; i++) { value += amplitude * snoise(p * frequency); frequency *= 2.0; amplitude *= 0.5; } return value; }
+    void main() { 
+      vec2 uv = vUv * 2.0 - 1.0; 
+      float dist = length(uv); 
+      float vignette = smoothstep(1.3, 0.4, dist); 
+      vec2 turbulence = vec2(fbm(uv * 1.5 + u_time * 0.05 + u_rotationVelocity * 0.3), fbm(uv * 1.5 + u_time * 0.05 + u_rotationVelocity * 0.3 + 100.0)) * 0.1; 
+      vec2 distortedUV = uv + turbulence; 
+      float fog = fbm(distortedUV * 2.0 + u_time * 0.02); 
+      fog = fog * 0.5 + 0.5; 
+      vec3 colorBg = vec3(0.02, 0.02, 0.03); 
+      vec3 colorFog = vec3(0.1, 0.05, 0.02); 
+      vec3 finalColor = mix(colorBg, colorFog, fog * 0.4);
+      finalColor *= vignette;
+      gl_FragColor = vec4(finalColor, 1.0); 
+    }
+  `;
+  const fogUniforms = { u_time: { value: 0.0 }, u_rotationVelocity: { value: 0.0 } };
+  const fogMaterial = new THREE.ShaderMaterial({ vertexShader: fogVertexShader, fragmentShader: fogFragmentShader, uniforms: fogUniforms, depthWrite: false });
+  const fogPlane = new THREE.Mesh(new THREE.PlaneGeometry(50, 50), fogMaterial);
+  fogPlane.position.z = -10; scene.add(fogPlane);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+  dirLight.position.set(5, 10, 8); dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 2048; dirLight.shadow.mapSize.height = 2048; scene.add(dirLight);
+  const fillLight = new THREE.DirectionalLight(0xffaa00, 0.2); 
+  fillLight.position.set(-5, -5, -8); scene.add(fillLight);
+
+  const root = new THREE.Group(); scene.add(root);
+  const pivot = new THREE.Group(); root.add(pivot); pivot.position.set(0, 0, 0);
+  
+  const innerSphere = new THREE.Mesh(new THREE.SphereGeometry(0.85, 32, 32), MATERIALS.inner);
+  innerSphere.receiveShadow = true; root.add(innerSphere);
+
+  const cubies = []; const baseGeo = new THREE.BoxGeometry(0.98, 0.98, 0.98);
+  function createSticker(mat, pos, rot) { const s = new THREE.Mesh(stickerGeo, mat); s.position.copy(pos); s.rotation.set(rot.x, rot.y, rot.z); s.receiveShadow = true; s.castShadow = true; return s; }
+
+  for (let x = -1; x <= 1; x++) {
+    for (let y = -1; y <= 1; y++) {
+      for (let z = -1; z <= 1; z++) {
+        const cubie = new THREE.Group();
+        const base = new THREE.Mesh(baseGeo, MATERIALS.base); base.castShadow = true; base.receiveShadow = true; cubie.add(base);
+        const off = 0.50;
+        if (x === 1) cubie.add(createSticker(MATERIALS.r, {x:off,y:0,z:0}, {x:0,y:Math.PI/2,z:0}));
+        if (x === -1) cubie.add(createSticker(MATERIALS.l, {x:-off,y:0,z:0}, {x:0,y:-Math.PI/2,z:0}));
+        if (y === 1) cubie.add(createSticker(MATERIALS.u, {x:0,y:off,z:0}, {x:-Math.PI/2,y:0,z:0}));
+        if (y === -1) cubie.add(createSticker(MATERIALS.d, {x:0,y:-off,z:0}, {x:Math.PI/2,y:0,z:0}));
+        if (z === 1) cubie.add(createSticker(MATERIALS.f, {x:0,y:0,z:off}, {x:0,y:0,z:0}));
+        if (z === -1) cubie.add(createSticker(MATERIALS.b, {x:0,y:0,z:-off}, {x:0,y:Math.PI,z:0}));
+        cubie.position.set(x * CUBE_STEP, y * CUBE_STEP, z * CUBE_STEP);
+        cubie.userData = { isCubie: true, gridPos: { x, y, z }, initialPos: { x, y, z }, initialQuaternion: new THREE.Quaternion(0, 0, 0, 1) };
+        root.add(cubie); cubies.push(cubie);
+      }
+    }
+  }
+
+  function triggerHaptic(duration) {
+    if (!gameState.vibrationEnabled || !navigator.vibrate) return;
+    try { navigator.vibrate(duration); } catch(e) {}
+  }
+
+  function startTimer() { if (gameState.timerRunning) return; gameState.timerRunning = true; gameState.timer = 0; gameState.timerInterval = setInterval(() => { gameState.timer += 10; updateTimerDisplay(); }, 10); }
+  function stopTimer() { gameState.timerRunning = false; if (gameState.timerInterval) { clearInterval(gameState.timerInterval); gameState.timerInterval = null; } }
+  function resetTimer() { stopTimer(); gameState.timer = 0; updateTimerDisplay(); }
+  function updateTimerDisplay() { 
+    const ms = gameState.timer; const seconds = Math.floor(ms / 1000); const centiseconds = Math.floor((ms % 1000) / 10); 
+    document.getElementById('timer').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`; 
+  }
+  function showStatus(msg, duration = 2000) { const status = document.getElementById('status'); status.textContent = msg; status.classList.add('show'); setTimeout(() => status.classList.remove('show'), duration); }
+
+  let dragging = false, layerActive = false;
+  let startX, startY, currentX, currentY;
+  let startPoint = new THREE.Vector3();
+  let startCubie = null;
+  let currentAxis = null;
+  let screenAxisVector = new THREE.Vector2();
+  let activeTouches = 0;
+  let snapAnimating = false;
+  let lastQuaternion = new THREE.Quaternion();
+  let viewQ = new THREE.Quaternion();
+  let vDown = new THREE.Vector3();
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  const dragPlane = new THREE.Plane();
+  const planeIntersect = new THREE.Vector3();
+  let lastHapticAngle = 0;
+
+  function snapToGrid(object) {
+    object.updateMatrix();
+    const pos = new THREE.Vector3().setFromMatrixPosition(object.matrix);
+    pos.x = Math.round(pos.x / CUBE_STEP) * CUBE_STEP;
+    pos.y = Math.round(pos.y / CUBE_STEP) * CUBE_STEP;
+    pos.z = Math.round(pos.z / CUBE_STEP) * CUBE_STEP;
+    object.position.copy(pos);
+    const rotMat = new THREE.Matrix4().extractRotation(object.matrix);
+    const xAxis = new THREE.Vector3().setFromMatrixColumn(rotMat, 0);
+    const yAxis = new THREE.Vector3().setFromMatrixColumn(rotMat, 1);
+    const zAxis = new THREE.Vector3().setFromMatrixColumn(rotMat, 2);
+    const alignAxis = (v) => {
+      const absX = Math.abs(v.x), absY = Math.abs(v.y), absZ = Math.abs(v.z);
+      if (absX > absY && absX > absZ) return new THREE.Vector3(Math.sign(v.x), 0, 0);
+      if (absY > absX && absY > absZ) return new THREE.Vector3(0, Math.sign(v.y), 0);
+      return new THREE.Vector3(0, 0, Math.sign(v.z));
+    };
+    const newRotMat = new THREE.Matrix4().makeBasis(alignAxis(xAxis), alignAxis(yAxis), alignAxis(zAxis));
+    object.quaternion.setFromRotationMatrix(newRotMat);
+    object.quaternion.normalize();
+    object.scale.set(1, 1, 1);
+    object.updateMatrix();
+    object.userData.gridPos.x = Math.round(pos.x / CUBE_STEP);
+    object.userData.gridPos.y = Math.round(pos.y / CUBE_STEP);
+    object.userData.gridPos.z = Math.round(pos.z / CUBE_STEP);
+  }
+
+  function getSphereVec(x, y) {
+    const nx = (x / window.innerWidth) * 2 - 1, ny = -(y / window.innerHeight) * 2 + 1;
+    const z = Math.max(0, 1 - nx*nx - ny*ny);
+    return new THREE.Vector3(nx, ny, Math.sqrt(z)).normalize();
+  }
+
+  function getHit(clientX, clientY) {
+    mouse.x = (clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObjects(cubies, true);
+    if (hits.length > 0) {
+      let t = hits[0].object;
+      while(t.parent && !t.userData.isCubie) t = t.parent;
+      return { cubie: t, point: hits[0].point };
+    }
+    return null;
+  }
+
+  function animateSnapTo(targetAngle) {
+    if (snapAnimating) return;
+    snapAnimating = true;
+    const startAngle = pivot.rotation[currentAxis];
+    const startTime = performance.now();
+    const duration = 300; 
+    function animate(time) {
+      const elapsed = time - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 4);
+      pivot.rotation[currentAxis] = startAngle + (targetAngle - startAngle) * eased;
+      checkHapticFeedback(pivot.rotation[currentAxis]);
+      if (progress < 1) { requestAnimationFrame(animate); } else { finishMove(targetAngle); }
+    }
+    requestAnimationFrame(animate);
+  }
+
+  function checkHapticFeedback(currentAngle) {
+    const diff = Math.abs(currentAngle - lastHapticAngle);
+    if (diff > 0.35) { triggerHaptic(8); lastHapticAngle = currentAngle; }
+  }
+
+  function finishMove(targetAngle) {
+    pivot.rotation[currentAxis] = targetAngle; pivot.updateMatrixWorld();
+    triggerHaptic(20);
+    gameState.isSolved = false; [...pivot.children].forEach(c => { root.attach(c); snapToGrid(c); }); pivot.rotation.set(0, 0, 0);
+    layerActive = false; snapAnimating = false; gameState.isAnimating = false; gameState.rotationVelocity *= 0.8;
+    checkSolved();
+  }
+
+  stage.addEventListener("pointerdown", (e) => {
+    activeTouches++; if (activeTouches > 1 || gameState.isAnimating) return;
+    try { stage.setPointerCapture(e.pointerId); } catch(err) {}
+    dragging = true; startX = e.clientX; startY = e.clientY; currentX = e.clientX; currentY = e.clientY;
+    vDown = getSphereVec(e.clientX, e.clientY); lastQuaternion.copy(root.quaternion);
+    const hit = getHit(e.clientX, e.clientY);
+    if (hit) {
+      startCubie = hit.cubie; startPoint.copy(hit.point);
+      const planeNormal = camera.getWorldDirection(new THREE.Vector3()).negate();
+      dragPlane.setFromNormalAndCoplanarPoint(planeNormal, startPoint);
+    } else { startCubie = null; }
+  });
+
+  stage.addEventListener("pointercancel", (e) => {
+    activeTouches = Math.max(0, activeTouches - 1); dragging = false; startCubie = null;
+    try { stage.releasePointerCapture(e.pointerId); } catch(err) {}
+  });
+
+  stage.addEventListener("pointermove", (e) => {
+    if (!dragging || activeTouches > 1) return;
+    currentX = e.clientX; currentY = e.clientY;
+    const dx = currentX - startX; const dy = currentY - startY;
+    if (startCubie && !layerActive && !gameState.cameraLocked) {
+      mouse.x = (currentX / window.innerWidth) * 2 - 1; mouse.y = -(currentY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      if (raycaster.ray.intersectPlane(dragPlane, planeIntersect)) {
+         const worldD = new THREE.Vector3().subVectors(planeIntersect, startPoint);
+         const localD = worldD.applyQuaternion(root.quaternion.clone().invert());
+         if (localD.length() > 0.1) { activateLayerFromVector(localD); if (!gameState.timerRunning && gameState.isSolved) startTimer(); }
+      }
+    }
+    if (layerActive && !snapAnimating) {
+      const mouseVec = new THREE.Vector2(dx, dy); const pixelsMoved = mouseVec.dot(screenAxisVector);
+      const sensitivity = isMobile ? 0.022 : 0.018; 
+      pivot.rotation[currentAxis] = pixelsMoved * sensitivity;
+      checkHapticFeedback(pivot.rotation[currentAxis]);
+      gameState.rotationVelocity = Math.abs(pixelsMoved * 0.01) * 30;
+    } 
+    else if (!startCubie || gameState.cameraLocked) {
+      const vNow = getSphereVec(currentX, currentY); const axis = new THREE.Vector3().crossVectors(vDown, vNow);
+      if (axis.length() > 0.001) {
+        const angle = Math.acos(Math.min(1, vDown.dot(vNow))); const q = new THREE.Quaternion().setFromAxisAngle(axis.normalize(), angle * 2);
+        root.quaternion.multiplyQuaternions(q, viewQ); root.quaternion.normalize();
+        const deltaQ = new THREE.Quaternion().multiplyQuaternions(root.quaternion, lastQuaternion.clone().invert());
+        gameState.rotationVelocity = Math.abs(deltaQ.w - 1) * 50; lastQuaternion.copy(root.quaternion);
+      }
+    }
+  });
+
+  function activateLayerFromVector(localDelta) {
+    const startLoc = root.worldToLocal(startPoint.clone());
+    const lx = startLoc.x / CUBE_STEP, ly = startLoc.y / CUBE_STEP, lz = startLoc.z / CUBE_STEP;
+    let fAxis = 'z', max = 0;
+    if (Math.abs(lx) > max) { max=Math.abs(lx); fAxis='x'; } if (Math.abs(ly) > max) { max=Math.abs(ly); fAxis='y'; } if (Math.abs(lz) > max) { max=Math.abs(lz); fAxis='z'; }
+    let mAxis = null, maxM = 0; ['x','y','z'].forEach(a => { if (a === fAxis) return; if (Math.abs(localDelta[a]) > maxM) { maxM=Math.abs(localDelta[a]); mAxis=a; } });
+    if (!mAxis) return;
+    const axes = ['x','y','z']; currentAxis = axes.find(a => a !== fAxis && a !== mAxis);
+    const rotAxisWorld = new THREE.Vector3(); rotAxisWorld[currentAxis] = 1; rotAxisWorld.applyQuaternion(root.quaternion).normalize();
+    const tangentWorld = new THREE.Vector3().crossVectors(rotAxisWorld, startPoint);
+    if (tangentWorld.length() < 0.001) { const altVec = new THREE.Vector3(1, 0, 0); if (Math.abs(rotAxisWorld.dot(altVec)) > 0.9) altVec.set(0, 1, 0); tangentWorld.crossVectors(rotAxisWorld, altVec); }
+    tangentWorld.normalize();
+    const posA = startPoint.clone().project(camera); const posB = startPoint.clone().add(tangentWorld).project(camera);
+    screenAxisVector.set(posB.x - posA.x, -(posB.y - posA.y));
+    if (screenAxisVector.lengthSq() < 0.0001 || isNaN(screenAxisVector.x)) screenAxisVector.set(1, 0); screenAxisVector.normalize();
+    const val = Math.round(startCubie.userData.gridPos[currentAxis]);
+    const group = cubies.filter(c => Math.round(c.userData.gridPos[currentAxis]) === val);
+    if (group.length === 9) {
+      layerActive = true; gameState.isAnimating = true; pivot.rotation.set(0, 0, 0); group.forEach(c => pivot.attach(c)); startX = currentX; startY = currentY; lastHapticAngle = 0;
+    }
+  }
+
+  stage.addEventListener("pointerup", (e) => {
+    activeTouches = Math.max(0, activeTouches - 1);
+    try { if (layerActive && !snapAnimating) { const step = Math.PI / 2; const target = Math.round(pivot.rotation[currentAxis] / step) * step; animateSnapTo(target); } dragging = false; startCubie = null; viewQ.copy(root.quaternion); } finally { if(e.pointerId !== undefined) try { stage.releasePointerCapture(e.pointerId); } catch(err) {} }
+  });
+
+  function checkSolved() {
+    const faces = { U: [], D: [], R: [], L: [], F: [], B: [] };
+    cubies.forEach(cubie => {
+      cubie.children.forEach(child => {
+        if (child.type === 'Mesh' && child.geometry === stickerGeo) {
+          const localNormal = new THREE.Vector3(0, 0, 1);
+          const worldQuat = child.getWorldQuaternion(new THREE.Quaternion());
+          const localQuat = root.quaternion.clone().invert();
+          const worldNormal = localNormal.clone().applyQuaternion(worldQuat);
+          const rootLocalNormal = worldNormal.applyQuaternion(localQuat);
+          const n = rootLocalNormal.normalize();
+          let face = null;
+          if (n.y > 0.7) face = 'U'; else if (n.y < -0.7) face = 'D'; else if (n.x > 0.7) face = 'R'; else if (n.x < -0.7) face = 'L'; else if (n.z > 0.7) face = 'F'; else if (n.z < -0.7) face = 'B';
+          if (face) { const mat = child.material; faces[face].push(mat); }
+        }
+      });
+    });
+    let solved = true; Object.values(faces).forEach(faceStickers => { if (faceStickers.length !== 9) { solved = false; return; } const first = faceStickers[0]; if (!faceStickers.every(s => s === first)) solved = false; });
+    if (solved && !gameState.isSolved) { gameState.isSolved = true; stopTimer(); showStatus('🔥 CLEARED 🔥', 3000); }
+  }
+
+  document.getElementById('btnReset').onclick = () => { if (gameState.isAnimating) return; root.quaternion.set(0, 0, 0, 1); viewQ.set(0, 0, 0, 1); pivot.rotation.set(0, 0, 0); cubies.forEach(c => { if (c.parent === pivot) root.attach(c); const init = c.userData.initialPos; c.position.set(init.x * CUBE_STEP, init.y * CUBE_STEP, init.z * CUBE_STEP); c.quaternion.copy(c.userData.initialQuaternion); c.scale.set(1, 1, 1); c.userData.gridPos = { x: init.x, y: init.y, z: init.z }; c.updateMatrix(); }); gameState.isSolved = true; resetTimer(); showStatus('Status: Fresh', 1500); };
+
+  document.getElementById('btnScramble').onclick = async () => {
+    if (gameState.isAnimating) return; document.getElementById('btnScramble').disabled = true; gameState.isAnimating = true;
+    const moves = ['R', "R'", 'L', "L'", 'U', "U'", 'D', "D'", 'F', "F'", 'B', "B'"];
+    const scramble = []; for (let i = 0; i < 20; i++) { let move = moves[Math.floor(Math.random() * moves.length)]; if (scramble.length > 0 && scramble[scramble.length - 1][0] === move[0]) { move = moves[Math.floor(Math.random() * moves.length)]; } scramble.push(move); }
+    showStatus('Igniting...', 2000);
+    for (const move of scramble) { await executeMove(move, 80); }
+    gameState.isSolved = false; resetTimer(); document.getElementById('btnScramble').disabled = false; gameState.isAnimating = false; showStatus('BURN IT!', 1500);
+  };
+
+  async function executeMove(notation, duration = 300) {
+    return new Promise(resolve => {
+      const face = notation[0]; const modifier = notation[1] || '';
+      const moveMap = { 'R': { axis: 'x', layer: 1, dir: 1 }, 'L': { axis: 'x', layer: -1, dir: -1 }, 'U': { axis: 'y', layer: 1, dir: 1 }, 'D': { axis: 'y', layer: -1, dir: -1 }, 'F': { axis: 'z', layer: 1, dir: 1 }, 'B': { axis: 'z', layer: -1, dir: -1 } };
+      const m = moveMap[face]; if (!m) { resolve(); return; }
+      let angle = Math.PI / 2; if (modifier === "'") angle = -angle; if (modifier === "2") angle *= 2; angle *= m.dir;
+      const group = cubies.filter(c => Math.round(c.userData.gridPos[m.axis]) === m.layer);
+      if (group.length !== 9) { resolve(); return; }
+      pivot.rotation.set(0, 0, 0); group.forEach(c => pivot.attach(c)); currentAxis = m.axis;
+      const startTime = performance.now();
+      function animate(time) {
+        const elapsed = time - startTime; const progress = Math.min(elapsed / duration, 1); const eased = 1 - Math.pow(1 - progress, 4);
+        pivot.rotation[m.axis] = angle * eased; checkHapticFeedback(pivot.rotation[m.axis]);
+        if (progress < 1) { requestAnimationFrame(animate); } else { pivot.rotation[m.axis] = angle; pivot.updateMatrixWorld(); triggerHaptic(20); [...pivot.children].forEach(c => { root.attach(c); snapToGrid(c); }); pivot.rotation.set(0, 0, 0); resolve(); }
+      }
+      lastHapticAngle = 0; requestAnimationFrame(animate);
+    });
+  }
+
+  document.getElementById('btnLock').onclick = () => { gameState.cameraLocked = !gameState.cameraLocked; const btn = document.getElementById('btnLock'); const icon = btn.querySelector('span'); const label = btn.querySelector('div'); if (gameState.cameraLocked) { icon.textContent = '🔒'; label.textContent = 'LOCK'; btn.classList.add('active'); } else { icon.textContent = '🔓'; label.textContent = 'FREE'; btn.classList.remove('active'); } };
+
+  document.getElementById('vibro-toggle').onclick = () => {
+    gameState.vibrationEnabled = !gameState.vibrationEnabled;
+    const btn = document.getElementById('vibro-toggle');
+    if (gameState.vibrationEnabled) { btn.textContent = '📳'; btn.classList.add('active'); triggerHaptic(50); } 
+    else { btn.textContent = '🔕'; btn.classList.remove('active'); }
+  };
+
+  let resizeTimeout; window.addEventListener('resize', () => { clearTimeout(resizeTimeout); resizeTimeout = setTimeout(() => { renderer.setSize(window.innerWidth, window.innerHeight); camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); }, 100); });
+  camera.position.set(7, 7, 10); camera.lookAt(0, 0, 0);
+  let time = 0; function loop() { requestAnimationFrame(loop); time += 0.016; fogUniforms.u_time.value = time; fogUniforms.u_rotationVelocity.value = gameState.rotationVelocity; gameState.rotationVelocity *= 0.95; renderer.render(scene, camera); }
+  loop();
+})();
+</script>
+</body>
+</html>
